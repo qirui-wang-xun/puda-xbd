@@ -1,0 +1,286 @@
+PUDA迁移：GitHub、Hugging Face下载与组合说明
+=========================================
+
+一、你的三个下载网址
+
+1. GitHub代码仓库（私有）
+https://github.com/qirui-wang-xun/puda-xbd
+用途：获取模型代码、数据加载器、训练脚本、环境版本记录和启动说明。
+
+2. GitHub Release附件（同一个私有仓库）
+https://github.com/qirui-wang-xun/puda-xbd/releases/tag/migration-v1
+用途：获取PU环境压缩包和模型权重。
+注意：git clone不会下载Release附件，需要另外下载。
+
+3. Hugging Face数据仓库（私有）
+https://huggingface.co/datasets/xun666666/puda-xbd-data
+用途：获取源域数据及Wildfire目标域P/U/test。
+
+新服务器需要分别登录两个平台。原电脑的登录状态不会自动转移。
+不要把密码或Token写到代码、聊天、启动脚本和日志中。
+
+二、GitHub代码仓库下载什么
+
+直接下载/克隆整个仓库，不要只复制某一个训练脚本。
+核心文件：
+- train_xbd.py：第一阶段训练，加载源域与目标域P/U。
+- train_stage2_from_last.py：用第一阶段last生成全部U伪标签，运行修正后的第二阶段。
+- xbd_data.py：图像预处理、标签映射、数据加载和测试。
+- source_adapter/train_source_remoteclip_rn50.py：提供源域收集和划分函数。
+  这里只复用数据处理函数，PUDA不需要加载RemoteCLIP模型或权重。
+- model/、utils/、pu_loss.py、pretrained_model_rename.py：模型和训练依赖。
+- run_wildfire.sh：完整串行运行Wildfire的922、923、924。
+- environment.yml、requirements-frozen.txt：环境版本记录，用于核对和必要时重建。
+- MIGRATION.txt：简要迁移说明。
+- CODEX_DEPLOY_HANDOFF.txt：给新服务器Codex的完整部署与验收说明。
+
+代码初始实验快照：
+da7edaa4b38c7de5c143ab3c84d2f4aa28fe82fb
+此后新增的是说明文档。重现实验时可固定上述代码提交。
+
+三、GitHub Release下载什么
+
+Release共六个附件，建议全部下载：
+
+PU-linux.tar.gz.part-000
+PU-linux.tar.gz.part-001
+PU-linux.tar.gz.part-002
+  三个文件是同一个PU环境压缩包的分片，缺一不可。
+  必须按000、001、002顺序合并，不能逐个单独解压。
+
+resnet50-19c8e357.pth
+  PUDA使用的ImageNet ResNet50初始化权重，Wildfire实验需要。
+
+ tornado_seed924_stage1_last.pt
+  之前Tornado实验的第一阶段存档权重。
+  Wildfire从头训练不使用它，不要把它当Wildfire第一阶段初始化。
+
+SHA256SUMS.txt
+  附件的SHA256校验清单，下载后先校验再使用。
+
+环境恢复后包含Python和Python依赖，但不包含服务器的NVIDIA驱动。
+原环境是Linux x86_64，Python3.10、PyTorch2.10.0+cu128。
+目标服务器需具备兼容系统与驱动，不能保证直接跨操作系统/CPU架构使用。
+
+四、Hugging Face下载什么
+
+下载全部17个tar.gz压缩包，以及manifest.json和SHA256SUMS.txt。
+
+14个源域数据包：
+guatemala-volcano.tar.gz
+hurricane-florence.tar.gz
+hurricane-harvey.tar.gz
+hurricane-matthew.tar.gz
+hurricane-michael.tar.gz
+mexico-earthquake.tar.gz
+midwest-flooding.tar.gz
+nepal-flooding.tar.gz
+palu-tsunami.tar.gz
+pinery-bushfire.tar.gz
+portugal-wildfire.tar.gz
+socal-fire.tar.gz
+sunda-tsunami.tar.gz
+woolsey-fire.tar.gz
+
+3个Wildfire目标域数据包：
+santa-rosa-wildfire-train.tar.gz
+  目标域P的抽样池；每个seed从损坏类中选择400张P。
+santa-rosa-wildfire-test.tar.gz
+  独立测试集，4226张图，不能拿来训练或生成训练用伪标签。
+santa-rosa-wildfire_building_patches_64.tar.gz
+  外部U，53332张有效图像，全部参与目标域训练。
+  压缩包中总文件数是53333，额外一个非图像文件不会被加载。
+
+manifest.json记录每个压缩包的根目录、文件数、大小及SHA256。
+SHA256SUMS.txt用于批量校验。
+
+只下载三个Wildfire目标域包不足以从头运行第一阶段，还需要14个源域包。
+源域总计346687张，按seed划分出277349张训练数据与69338张未使用验证数据。
+
+五、它们怎样组合
+
+推荐最终目录：
+
+puda-deploy/
+  code/                        GitHub代码
+    train_xbd.py
+    train_stage2_from_last.py
+    run_wildfire.sh
+    ...
+  assets/                      GitHub Release附件
+    resnet50-19c8e357.pth
+    tornado_seed924_stage1_last.pt
+    PU-linux.tar.gz.part-000
+    PU-linux.tar.gz.part-001
+    PU-linux.tar.gz.part-002
+    PU-linux.tar.gz             合并后产生
+    SHA256SUMS.txt
+  envs/PU/                     合并后的环境解压到这里
+    bin/python
+    bin/activate
+    bin/conda-unpack
+    ...
+  data-archives/               Hugging Face下载的原始压缩包与校验清单
+  data/                        所有数据包统一解压到这里
+    xBD/
+      guatemala-volcano/
+      ...其余13个源域目录...
+      santa-rosa-wildfire-train/
+      santa-rosa-wildfire-test/
+    santa-rosa-wildfire_building_patches_64/
+  outputs/                     新实验的日志、权重、指标
+
+关系：
+- envs/PU/bin/python执行code里的训练脚本。
+- 第一阶段读取assets/resnet50-19c8e357.pth初始化模型。
+- 第一阶段从data/xBD读取源域，并读取Wildfire P和外部U。
+- 第二阶段用本次第一阶段的stage1_last.pt为外部U生成新伪标签。
+- 第二阶段自身从ImageNet权重和新分类头初始化，用伪标签U与原400个P训练。
+- 两阶段都在Wildfire独立test上评估。
+- 结果保存在outputs，每个seed的文件互相独立。
+
+六、新服务器完整下载与恢复命令
+
+以下命令由新服务器Codex在检查机器和权限后执行。
+如果已经存在同名目录，先核对内容，不要直接删除或覆盖。
+gh是GitHub官方命令行工具；若未安装，让Codex单独安装上传/下载工具，
+不要为安装工具而改动训练依赖。
+
+1）选择部署路径，登录GitHub：
+
+export DEPLOY="$HOME/puda-deploy"
+mkdir -p "$DEPLOY/assets" "$DEPLOY/envs" "$DEPLOY/data-archives" "$DEPLOY/data"
+gh auth login --hostname github.com --git-protocol https --web
+gh auth setup-git
+
+2）下载代码：
+
+git clone https://github.com/qirui-wang-xun/puda-xbd.git "$DEPLOY/code"
+
+若需固定训练代码版本，先保存本说明和CODEX_DEPLOY_HANDOFF.txt，再执行：
+
+git -C "$DEPLOY/code" checkout da7edaa4b38c7de5c143ab3c84d2f4aa28fe82fb
+
+3）下载Release附件：
+
+gh release download migration-v1 --repo qirui-wang-xun/puda-xbd --dir "$DEPLOY/assets"
+cd "$DEPLOY/assets"
+sha256sum -c SHA256SUMS.txt
+
+必须全部显示OK。
+
+4）合并并解压PU环境：
+
+cat PU-linux.tar.gz.part-000 PU-linux.tar.gz.part-001 PU-linux.tar.gz.part-002 > PU-linux.tar.gz
+gzip -t PU-linux.tar.gz
+mkdir -p "$DEPLOY/envs/PU"
+tar -xzf PU-linux.tar.gz -C "$DEPLOY/envs/PU"
+source "$DEPLOY/envs/PU/bin/activate"
+conda-unpack
+
+conda-unpack完成后不要移动envs/PU目录。
+
+5）检查Python和GPU：
+
+python -c "import torch,open_clip,pandas; print(torch.__version__); print(torch.cuda.is_available()); print(torch.cuda.get_device_name(0)); x=torch.ones(8,device='cuda'); print((x+x).cpu())"
+
+若为HPC/Slurm服务器，GPU检查和训练必须在分配的GPU节点上进行。
+不要在登录节点启动训练。
+
+6）登录Hugging Face并下载数据：
+
+hf auth login
+hf download xun666666/puda-xbd-data --repo-type dataset --local-dir "$DEPLOY/data-archives"
+cd "$DEPLOY/data-archives"
+sha256sum -c SHA256SUMS.txt
+
+7）将17个包解压到同一个data目录：
+
+for archive in "$DEPLOY"/data-archives/*.tar.gz; do
+    tar -xzf "$archive" -C "$DEPLOY/data"
+done
+
+不要再额外嵌套一个xBD目录，否则会形成data/xBD/xBD的错误路径。
+压缩包内已经带有正确的xBD/目录结构。
+
+七、运行前检查数据
+
+cd "$DEPLOY/code"
+python -u train_xbd.py \
+  --dataset santa-rosa-wildfire --seed 922 \
+  --source-root "$DEPLOY/data/xBD" \
+  --p-root "$DEPLOY/data/xBD/santa-rosa-wildfire-train" \
+  --u-root "$DEPLOY/data/santa-rosa-wildfire_building_patches_64" \
+  --test-root "$DEPLOY/data/xBD/santa-rosa-wildfire-test" \
+  --imagenet-weights "$DEPLOY/assets/resnet50-19c8e357.pth" \
+  --prior 0.7886 --p-count 400 --p-batch 16 --batch-size 16 \
+  --check-data --output-dir "$DEPLOY/verification/wildfire922"
+
+核对输出：source_count277349、source_val_unused69338、p_count400、
+u_count53332、test_count4226、prior0.7886。
+输出目录必须未被使用，重复检查应换一个新目录。
+
+八、正式训练
+
+普通GPU服务器可创建tmux：
+
+tmux new -s puda-wildfire
+
+在tmux内重新设置路径、激活环境并运行：
+
+export DEPLOY="$HOME/puda-deploy"
+source "$DEPLOY/envs/PU/bin/activate"
+cd "$DEPLOY/code"
+RUN_ROOT="$DEPLOY/outputs/wildfire_$(date +%Y%m%d_%H%M%S)"
+bash run_wildfire.sh "$DEPLOY/data" "$DEPLOY/assets/resnet50-19c8e357.pth" "$RUN_ROOT"
+
+默认顺序：922第一阶段 -> 922第二阶段 -> 923第一阶段 -> 923第二阶段
+-> 924第一阶段 -> 924第二阶段。全部串行。
+
+仅运行一个seed，例如922：
+
+bash run_wildfire.sh "$DEPLOY/data" "$DEPLOY/assets/resnet50-19c8e357.pth" "$RUN_ROOT" 922
+
+在Slurm服务器上，把同样的环境激活和启动命令写入GPU作业脚本。
+按集群墙钟时间限制合理拆分作业；当前代码不支持任意中途断点续训。
+
+九、必须保持的实验设置
+
+Wildfire先验0.7886。
+seed922、923、924，每个seed从头训练第一阶段。
+第一阶段batch16+额外P16；第二阶段batch16。
+两个阶段各50轮；workers6。
+第一阶段lr1=0.0016102287018430657。
+第二阶段lr2=0.00012266834924870657。
+第一阶段保持当前实现；第二阶段为已修正版本。
+第二阶段伪标签来自对应seed的stage1_last，不使用历史积累伪标签。
+第二阶段保留原来ImageNet初始化，不用stage1编码器初始化自身。
+外部损坏类0是评价F1的正类；PUDA内部训练正类为1，代码负责转换。
+不要为了提高结果擅自调学习率、改标签、选择最好轮次或反复筛选重跑。
+
+十、结果在哪里、怎么看
+
+每个seed都有以下目录，例如922：
+outputs/<本次运行>/wildfire_seed922_stage1/
+outputs/<本次运行>/wildfire_seed922_stage2/
+
+主报告读取第二阶段：
+last.json：第50轮OA、damage_f1、混淆矩阵。
+last.pt：对应最后一轮权重。
+best_oa.json、best_oa.pt：按测试OA选出的最好轮次，单独保留。
+history.jsonl：各轮指标。
+pseudo_samples.json：第二阶段使用的U软分数和P。
+
+OA和damage_f1是0到1的小数，报告百分数时乘100。
+最终汇报三个seed的last指标，以及均值±样本标准差（ddof=1）。
+不要把best_oa对应F1或历史最高F1当成last结果。
+
+十一、给另一台服务器Codex的任务指令
+
+请根据本文件和CODEX_DEPLOY_HANDOFF.txt在这台服务器实际完成部署。
+先检测系统、GPU和可用空间，然后下载私有GitHub代码与Release附件，
+恢复PU环境，下载并校验Hugging Face的17个数据包，运行数据检查。
+保持当前实验协议，启动Wildfire三个seed的完整串行训练。
+需要认证时指导我在终端操作，不索要聊天中的Token。
+启动后报告路径、tmux窗口或调度作业ID、真实训练进度和日志位置。
+不要仅提供方案；遇到权限或硬件阻塞时明确说明。
