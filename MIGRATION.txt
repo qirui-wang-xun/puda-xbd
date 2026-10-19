@@ -1,0 +1,43 @@
+PUDA xBD migration snapshot
+
+Upstream: https://github.com/JonasSonntag/Positive-Unlabeled-Domain-Adaptation
+Destination code: https://github.com/qirui-wang-xun/puda-xbd
+Destination dataset: https://huggingface.co/datasets/xun666666/puda-xbd-data
+
+Protocol
+- Source split: exclude joplin-tornado, lower-puna-volcano, moore-tornado,
+  santa-rosa-wildfire, tuscaloosa-tornado and derived family directories.
+- Stratified source training fraction 0.8, split independently for each seed.
+- Wildfire: 400 damaged P, all external U, independent event test directory.
+- Damage external label=0; PUDA internal positive=1. F1 is damage-class F1.
+- Seed 922, 923, 924. Wildfire prior 0.7886.
+- Stage1 batch16 plus P16; original stage1 optimizer/loss/BN behavior retained.
+- Stage2: final stage1 checkpoint predicts ALL U in eval/no_grad at threshold0.5;
+  append exact 400 P. ImageNet encoder + random classifier initialization.
+  Clear gradients each step, train mode per epoch, StepLR once per epoch.
+- Both stages 50 epochs; stage2 batch16; DataLoader workers6.
+- Save last and best OA, with test OA and damage F1. Best OA uses test metrics;
+  use fixed last for the primary comparison, not test-selected checkpoints.
+
+New server (compatible Linux architecture/system libraries and NVIDIA driver):
+1. Download repository and release assets. Verify assets using SHA256SUMS.txt.
+2. cat PU-linux.tar.gz.part-* > PU-linux.tar.gz
+3. mkdir -p /your/path/envs/PU
+4. tar -xzf PU-linux.tar.gz -C /your/path/envs/PU
+5. source /your/path/envs/PU/bin/activate
+6. conda-unpack
+7. python -c "import torch; print(torch.__version__, torch.cuda.is_available())"
+8. Download all dataset archives and verify its SHA256SUMS.txt.
+9. mkdir -p /your/path/data
+   for archive in /downloaded/dataset/*.tar.gz; do
+       tar -xzf "$archive" -C /your/path/data
+   done
+10. From this code directory:
+    bash run_wildfire.sh /your/path/data /downloaded/assets/resnet50-19c8e357.pth /your/path/new_outputs
+    Or append 922 / 923 / 924 to run only a chosen seed.
+
+The output root must not already contain the stage directories being created.
+The included tornado_seed924_stage1_last.pt is an archival Tornado checkpoint,
+NOT a Wildfire initialization. No RemoteCLIP checkpoint is needed by PUDA.
+Environment package does not include NVIDIA drivers or external editable source trees.
+No credentials should be committed to this repository.

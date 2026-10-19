@@ -1,0 +1,9 @@
+{
+  "train_xbd.py": "62c03618ea078adb71e6d7435348961f087b0cfb9df2996480bbfc9bafeba9a9",
+  "train_stage2_from_last.py": "7fd19a4de6010e4dc8d761cf5a656485071df338a5b579d27176d237fd381b12",
+  "xbd_data.py": "5f63cd9be33ea1956a1854422f8800299e0dc87634a2eabbf5792c31a09df806",
+  "pu_loss.py": "d08389c2439f2fb97b8d88e33070c2d2e8c7d7fc478984b520cee4eba77fa9cd",
+  "pretrained_model_rename.py": "121e6611d62dba415e80064db787831b3f515537d0cee0c64a8156c1d806640a",
+  "README.md": "bdd4c086872fd63232995ae28192f71e2906a192f4b2cabdaae97c041cbed7c6",
+  "XBD_NOTES.txt": "fc9a69cda3b4142de90d1e20e2c73945912c464ec95fb75ad1885636dc51984e"
+}

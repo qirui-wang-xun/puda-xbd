@@ -1,0 +1,2 @@
+Original implementation: https://github.com/JonasSonntag/Positive-Unlabeled-Domain-Adaptation
+This snapshot includes local xBD adaptation and corrected stage2. No upstream license file was found in the local checkout; public redistribution permissions have not been verified.

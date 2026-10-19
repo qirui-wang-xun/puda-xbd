@@ -1,0 +1,79 @@
+PUDA xBD baseline adapter
+=========================
+Entry: train_xbd.py; sequential 3 datasets x 3 seeds: run_xbd_queue.py.
+Original main.py, model/net.py, pu_loss.py, and pretrained_model_rename.py are unchanged.
+
+DATA / LABELS
+Source uses the exact collect_samples/split_samples functions from ../remoteclip-exp/train_source_remoteclip_rn50.py.
+Excludes joplin-tornado, lower-puna-volcano, santa-rosa-wildfire, moore-tornado,
+tuscaloosa-tornado, including suffixed directories. Uses the seed-specific 80%
+source training split (277349); 20% source validation (69338) is not used for training.
+P: fixed 400 damage images, selected by the same sorted scan + seeded shuffle as PANDA/CE.
+U: all images in the specified external flat directory. No fabricated U ground-truth labels.
+Target loader contains P + U as in the original PUDA dataset, so P can also appear in its ordinary batch.
+Test: independent <disaster>-test, evaluated after each epoch; best checkpoint selected by test OA at user request.
+Internal positive = 1 (damage), negative = 0, unlabeled PU label = -1.
+Exported metrics / predictions use external damage label 0 and OA + damage F1.
+Given priors are passed directly to nnPU: tornado .4379, volcano .3591, wildfire .7886.
+They are user-supplied; this implementation does not verify their origin or derive them from test.
+The prior parameter is expected to describe the target positive proportion used by nnPU.
+
+AUTHORIZED BATCH ADAPTATION
+Keep 400 P total; draw 16 P without replacement within each step (can recur across steps).
+Ordinary target batch = 16; append sampled P => normally 32 target images.
+Source batch = 16; duplicate its first 16 => normally 32 source images, same upstream construction.
+Threshold still averages ALL 400 P probabilities, computed in no-gradient mini-batches with train-mode BN. This changes BN batch statistics compared with the original single 400-P forward pass and is explicitly part of the memory adaptation.
+All 400 P join the second-stage pseudo-labeled training set.
+
+PRESERVED SETTINGS
+Original custom ResNet50 encoder/decoder and 2048->1000->2 classifier, dropout .1.
+Original ImageNet resnet50-19c8e357.pth initialization; NOT a RemoteCLIP checkpoint.
+Original transforms: Resize 256x256, CenterCrop 221x221, ImageNet normalization.
+Stage1 50 epochs; SGD encoder lr=.0016102287018430657, wd=.0005;
+classifier same lr/wd, momentum=.9. Original composite loss:
+.93*source_CE + .86*(source_norm+target_norm+entropy+.049*KL+.2*DAL) + nnPU.
+Norm/entropy weights .05; nnPU sigmoid risk, gamma=1, beta=0.
+Record pseudo-label candidates after epoch 20; retain >=10 records and original threshold rule.
+Stage2 new ImageNet encoder + new classifier; 50 epochs; SGD lr=.00012266834924870657;
+StepLR(step_size=35,gamma=.0035) stepped EVERY BATCH, as upstream.
+FP32; no new AMP, PEFT, EMA or gradient accumulation scheme.
+
+UPSTREAM QUIRKS INTENTIONALLY RETAINED (not silently repaired)
+- DAL operates on detached previous-step reconstructions, so it contributes no gradient.
+- Decoder constructs fresh BatchNorm modules on each call.
+- Stage2 upstream has no optimizer.zero_grad() between updates and leaves G2/F2 in eval
+  mode after the first update (it mistakenly calls train() on G/F). This adapter preserves
+  the resulting gradient accumulation and mode, rather than claiming to fix the method.
+- A source minibatch missing one class yields NaN for that class's threshold mean, as upstream.
+These are implementation limitations of strict code reproduction. A corrected-method variant
+would need to be explicitly distinguished and authorized.
+
+COMPATIBILITY / RESOURCE / EVALUATION ADAPTATIONS
+Modern Resize and next(iterator) interfaces; explicit softmax dimensions; safe pandas aggregation.
+No import-time download/save from pretrained_model_rename; reuse its exact key mapping via AST.
+Pretrained weights downloaded to torch cache, no rewriting source files.
+MaxUnpool2d CUDA has no deterministic implementation: deterministic algorithms warn_only=True.
+Seeds control torch/numpy/P sampling; bitwise reproducibility is not guaranteed on CUDA.
+Images are read lazily instead of stacking the entire U/pseudo dataset into RAM.
+No-gradient passes used for unused diagnostic graphs and detached reconstructions.
+Unlabeled-data accuracy diagnostics removed because U has no true labels.
+Independent test evaluation preserves training modes and CPU RNG.
+If no pseudo-labels survive, explicitly report stage1 fallback (not a completed stage2).
+Full model checkpoints, manifest files, config, per-epoch history and predictions saved per run.
+Do not compare --smoke-test results: it uses tiny subsets and synthetic stage2 pseudo-labels.
+
+RUN (does not touch existing PANDA/CE queue)
+conda activate PU
+cd /home/qiruiwang/panda/Positive-Unlabeled-Domain-Adaptation
+python run_xbd_queue.py
+
+Single experiment:
+python train_xbd.py --dataset joplin-tornado --seed 922 --output-dir outputs/joplin_922
+
+Data audit only (no GPU, no weight download):
+python run_xbd_queue.py --check-data --output-root outputs/data_audit
+
+USER-REQUESTED CHECKPOINT REPORTING
+Every epoch saves last.pt/last.json. best_oa.pt/best_oa.json are selected only by highest test OA across both stages (first epoch wins a tie). Report OA and damage-class-0 F1 from that SAME selected epoch. No independent F1-best checkpoint. Record stage and epoch. Per-epoch results are in epoch_tests/. Final/last metrics remain separate from test-selected best metrics.
+
+Active queue now uses run_xbd_parallel.py with concurrency=2 (user requested). Adopted Tornado 922 without restarting it. Independent logs and common status/summary preserved. A failed run stops new launches while the other active run may finish.
