@@ -1,0 +1,265 @@
+PUDA Wildfire deployment handoff for another Codex
+================================================
+Prepared 2026-10-18. This document is intended to be given directly to Codex
+on the destination server. Follow the actual repository code if diagnosing a
+problem; do not silently substitute a different PUDA implementation.
+
+1. User objective and authorization
+----------------------------------
+Deploy the uploaded experiment and run complete Wildfire experiments for
+seeds 922, 923, 924, sequentially. Each seed trains stage1 from ImageNet for
+50 epochs, generates fresh U pseudo labels from its own stage1 LAST model,
+then trains the corrected stage2 for 50 epochs. Report final test OA and F1
+for external damage class 0. Keep every seed's logs and checkpoints.
+
+Inspect the destination machine, choose a writable deployment directory,
+download, verify, unpack, test, then launch durable training. Do not merely
+provide commands and stop if the user has asked you to deploy and run it.
+Ask the user only for missing credentials, required scheduler/account choices,
+or an incompatible platform. Never request tokens in chat or print them.
+Do not stop existing jobs or modify drivers without separate authorization.
+
+2. Authoritative resources
+--------------------------
+GitHub PRIVATE repo:
+  https://github.com/qirui-wang-xun/puda-xbd
+Training code snapshot commit:
+  da7edaa4b38c7de5c143ab3c84d2f4aa28fe82fb
+This handoff may be in a later documentation-only commit. Pin the training
+snapshot above when reproducing it; save this handoff before checking it out.
+
+GitHub PRIVATE Release:
+  https://github.com/qirui-wang-xun/puda-xbd/releases/tag/migration-v1
+Assets (six files):
+  PU-linux.tar.gz.part-000
+  PU-linux.tar.gz.part-001
+  PU-linux.tar.gz.part-002
+  resnet50-19c8e357.pth
+  tornado_seed924_stage1_last.pt
+  SHA256SUMS.txt
+
+Hugging Face PRIVATE dataset:
+  https://huggingface.co/datasets/xun666666/puda-xbd-data
+17 archives plus manifest.json and SHA256SUMS.txt.
+All 17 archives are needed for the supplied from-scratch source/target setup.
+
+The Tornado checkpoint is an archive/reference, NOT a Wildfire initialization.
+RemoteCLIP weights are NOT used by this PUDA model. The source_adapter script
+is included only to reuse source collection and splitting functions.
+
+3. Destination prerequisites
+----------------------------
+- Linux x86_64 compatible with the packed environment and its system libraries.
+- NVIDIA CUDA-capable GPU with compatible driver. Packed environment has
+  Python3.10, PyTorch2.10.0+cu128. Packing does NOT include the driver.
+- git, tar, sha256sum, bash, realpath, tmux (for non-scheduled servers).
+- GitHub CLI gh for private repo/Release access. Install separately if absent.
+- Sufficient disk space: environment unpacked about8.1GB, compressed about4.5GB;
+  split pieces and combined archive temporarily occupy space together.
+  Prefer at least40GB free initially, more for outputs and retained artifacts.
+- Original local GPU was RTX4000Ada20GB; stage1 batch16+P16 completed multiple
+  full runs, with PyTorch peak allocation about10.51GiB. Allow extra headroom.
+- workers=6 per DataLoader; stage1 has source and target loaders concurrently.
+  Do not confuse these workers with parallel experiments.
+
+If this is a Slurm/HPC server, run GPU checks and training in an allocated GPU
+job, not on a login node. Adapt submission wrapper, not scientific parameters.
+The launcher runs ALL THREE seeds sequentially and may exceed a job walltime.
+It can take one seed argument; for limited walltime use separate sequential
+jobs or handle the two stages explicitly. Checkpoint resume is NOT implemented.
+
+4. Authentication
+-----------------
+Authentication from the original workstation does not transfer automatically.
+In the destination user's terminal:
+  gh auth login --hostname github.com --git-protocol https --web
+  gh auth setup-git
+After unpacking the PU environment:
+  hf auth login
+Private download only needs appropriate READ access. Let the user type tokens
+in their terminal. Do not embed tokens in scripts, URLs, logs, or commits.
+
+5. Download code and environment
+-------------------------------
+Commands below assume a fresh directory. Replace DEPLOY with the destination
+path preferred by the user; never reuse HOME as a custom variable.
+
+  export DEPLOY="$HOME/puda-deploy"
+  mkdir -p "$DEPLOY/assets" "$DEPLOY/envs" "$DEPLOY/data-archives" "$DEPLOY/data"
+  git clone https://github.com/qirui-wang-xun/puda-xbd.git "$DEPLOY/code"
+  git -C "$DEPLOY/code" checkout da7edaa4b38c7de5c143ab3c84d2f4aa28fe82fb
+  gh release download migration-v1 --repo qirui-wang-xun/puda-xbd --dir "$DEPLOY/assets"
+
+If directories already exist, inspect them and resume safely; do not delete
+or force overwrite arbitrary existing outputs.
+
+  cd "$DEPLOY/assets"
+  sha256sum -c SHA256SUMS.txt
+  cat PU-linux.tar.gz.part-000 PU-linux.tar.gz.part-001 PU-linux.tar.gz.part-002 > PU-linux.tar.gz
+  gzip -t PU-linux.tar.gz
+  mkdir -p "$DEPLOY/envs/PU"
+  tar -xzf PU-linux.tar.gz -C "$DEPLOY/envs/PU"
+  source "$DEPLOY/envs/PU/bin/activate"
+  conda-unpack
+
+The environment must be extracted to its FINAL location before conda-unpack.
+Do not move it afterward. A separate Conda install is not required for this
+activation path. Do not upgrade torch/open_clip during reproduction.
+If it fails due to system compatibility, document the exact error and rebuild
+using environment.yml/version records only after determining necessary changes.
+
+Verify on a GPU allocation:
+  python -c "import torch,open_clip,pandas; print(torch.__version__); print(open_clip.__version__); print(torch.cuda.is_available()); print(torch.cuda.get_device_name(0)); x=torch.ones(8,device='cuda'); print((x+x).cpu())"
+
+A working import alone is not sufficient; check CUDA computation too.
+
+6. Download and unpack data
+--------------------------
+  hf auth login
+  hf download xun666666/puda-xbd-data --repo-type dataset --local-dir "$DEPLOY/data-archives"
+  cd "$DEPLOY/data-archives"
+  sha256sum -c SHA256SUMS.txt
+  for archive in "$DEPLOY"/data-archives/*.tar.gz; do
+      tar -xzf "$archive" -C "$DEPLOY/data"
+  done
+
+Expected layout:
+  data/xBD/<14 source disaster folders>/<damage class>/*
+  data/xBD/santa-rosa-wildfire-train/<damage class>/*
+  data/xBD/santa-rosa-wildfire-test/<damage class>/*
+  data/santa-rosa-wildfire_building_patches_64/*
+
+Source folders:
+  guatemala-volcano, hurricane-florence, hurricane-harvey, hurricane-matthew,
+  hurricane-michael, mexico-earthquake, midwest-flooding, nepal-flooding,
+  palu-tsunami, pinery-bushfire, portugal-wildfire, socal-fire, sunda-tsunami,
+  woolsey-fire.
+
+Source excludes these five families and derived directories:
+  joplin-tornado, lower-puna-volcano, moore-tornado,
+  santa-rosa-wildfire, tuscaloosa-tornado.
+The Wildfire train/test folders are present in xBD for target use but the
+source collector excludes them. Do not remove this exclusion.
+Expected counts:
+  Source collected total 346687; source training277349; unused source val69338.
+  Wildfire train folder17729 images; choose400 damage P using each seed.
+  U53332 supported images; archive has53333 files including one non-image file.
+  Test4226 images.
+
+7. Data-only check (no training)
+-------------------------------
+Activate the restored environment, then:
+
+  cd "$DEPLOY/code"
+  python -u train_xbd.py \
+    --dataset santa-rosa-wildfire --seed 922 \
+    --source-root "$DEPLOY/data/xBD" \
+    --p-root "$DEPLOY/data/xBD/santa-rosa-wildfire-train" \
+    --u-root "$DEPLOY/data/santa-rosa-wildfire_building_patches_64" \
+    --test-root "$DEPLOY/data/xBD/santa-rosa-wildfire-test" \
+    --imagenet-weights "$DEPLOY/assets/resnet50-19c8e357.pth" \
+    --prior 0.7886 --p-count 400 --p-batch 16 --batch-size 16 \
+    --check-data --output-dir "$DEPLOY/verification/wildfire922"
+
+All output directories are created with exist_ok=False. Use a NEW path if a
+check has already run. Verify data_audit.json against the counts above.
+Excluded-directory lists differ from the original workstation because most
+excluded directories were deliberately not uploaded. Actual source counts and
+relative sample identities must agree.
+
+8. Complete training
+--------------------
+The launcher provides all important paths explicitly, overriding old local
+path defaults. Do not run train_xbd.py with bare defaults on the new server.
+
+For a non-scheduled GPU server, create a tmux session:
+  tmux new -s puda-wildfire
+Inside that session (set DEPLOY again if opening a separate shell):
+  export DEPLOY="$HOME/puda-deploy"
+  source "$DEPLOY/envs/PU/bin/activate"
+  cd "$DEPLOY/code"
+  RUN_ROOT="$DEPLOY/outputs/wildfire_$(date +%Y%m%d_%H%M%S)"
+  bash run_wildfire.sh "$DEPLOY/data" "$DEPLOY/assets/resnet50-19c8e357.pth" "$RUN_ROOT"
+
+This runs922 stage1 ->922 stage2 ->923 stage1 ->923 stage2 ->924 stage1 ->924 stage2.
+Detach tmux with Ctrl-b then d; reattach with tmux attach -t puda-wildfire.
+For a single seed, append922 (or923/924) to the launcher arguments.
+
+Use the same command inside an approved GPU batch job on a scheduled server.
+Do not launch concurrent copies onto the same GPU by default.
+
+9. Fixed experimental settings
+------------------------------
+- P=400 sampled damaged examples from target train; U=ALL external U images.
+- external damage0: destroyed + major-damage.
+- external non-damage1: minor-damage + no-damage.
+- PUDA internal positive is1. Evaluation converts back; F1 positive_label=0.
+- Wildfire prior0.7886; seeds922/923/924.
+- Stage1 batch16 + extra P16; P sampled from the fixed400 pool.
+- Stage1 epochs50, lr1=0.0016102287018430657.
+- Stage1 original losses, reconstruction behavior and training-mode behavior
+  retained, including the original final-incomplete-batch skip AFTER forward.
+  Do not silently add unrelated stage1 algorithm fixes.
+- workers6; no AMP in this PUDA implementation (FP32).
+- Stage1 last generates fresh pseudo probabilities for ALL U in eval/no_grad,
+  threshold>0.5 means INTERNAL positive1; no historical accumulation/filtering.
+- Add the exact same400 known P via p_samples.json, never resample P at stage2.
+- Stage2 starts from ImageNet encoder + new classifier, NOT stage1 weights.
+- Stage2 epochs50; batch16; lr2=0.00012266834924870657.
+- Stage2 SGD encoder no momentum, classifier momentum0.9; weight_decay0.0005.
+- Stage2 zero_grad each batch; train mode each epoch; evaluation restores modes.
+- StepLR step_size35 gamma0.0035, once per EPOCH.
+- Original resize256, center crop221, ImageNet normalization retained.
+- Last epoch is the primary reported result. Best OA retained separately.
+- This is an adapted/corrected PUDA baseline, not an exact upstream reproduction.
+
+10. Outputs and reporting
+-------------------------
+RUN_ROOT/wildfire_seed922_stage1.console.log
+RUN_ROOT/wildfire_seed922_stage1/stage1_last.pt
+RUN_ROOT/wildfire_seed922_stage1/p_samples.json
+RUN_ROOT/wildfire_seed922_stage1/data_audit.json
+RUN_ROOT/wildfire_seed922_stage2.console.log
+RUN_ROOT/wildfire_seed922_stage2/pseudo_samples.json
+RUN_ROOT/wildfire_seed922_stage2/data_audit.json
+RUN_ROOT/wildfire_seed922_stage2/history.jsonl
+RUN_ROOT/wildfire_seed922_stage2/last.pt
+RUN_ROOT/wildfire_seed922_stage2/last.json
+RUN_ROOT/wildfire_seed922_stage2/best_oa.pt
+RUN_ROOT/wildfire_seed922_stage2/best_oa.json
+Same structure for923/924.
+
+Successful completion requires all three stage2 last.json files with epoch50,
+finite OA and damage_f1, existing checkpoints, and no failed final process.
+Metrics are fractions; multiply by100 for percentage presentation.
+Report each seed's last OA/F1, then mean and SAMPLE standard deviation (ddof1).
+Do not substitute best or repeatedly restart based on target-test F1.
+A zero F1 is a result to investigate, not a reason to fabricate success.
+The best_oa checkpoint is selected on test OA; distinguish it from fixed last.
+
+11. Failure handling
+--------------------
+- Keep full traceback/logs. Never report a dead tmux pane as active training.
+- Check actual training process + advancing logs before claiming progress.
+- First-stage decoder has max_unpool2d nondeterminism warning; warn_only=True
+  allows it. This warning alone is not training failure.
+- NVML driver/library mismatch is a server driver issue; CUDA imports can work
+  despite broken nvidia-smi. An allocator NVML assertion can obscure an OOM.
+- Keep batch16+16 for comparability; do not silently change batch size, lr,
+  precision, prior, labels, P pool or loss functions to make it run.
+- NaN loss/thresholds are invalid. Stop the affected job, preserve evidence,
+  diagnose, and report before changing scientific settings.
+- No general checkpoint RESUME implementation is provided. last.pt is not a
+  full optimizer/RNG/dataloader resume state. Do not invent --resume flags.
+- If stage1 completed but stage2 failed, run train_stage2_from_last.py using the
+  existing stage1_last.pt and p_samples.json, with a fresh stage2 output path.
+  This restarts stage2 from its defined initialization, not a mid-epoch resume.
+- Both parsers expose --help. run_wildfire.sh is the authoritative paired call.
+
+12. What the destination Codex should deliver
+--------------------------------------------
+Provide deployment directory and pinned revision, authentication checks without
+secrets, checksum results, GPU/CUDA check, data counts, exact launched command,
+job ID or tmux window, current log location, and later final metrics.
+Do not stop at 'it should work': verify actual initial training steps and then
+leave a persistent full three-seed run. Explain any external blocker precisely.
